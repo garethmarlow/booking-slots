@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #6b6b6b;
+      --line: #e3e3e3;
+      --accent: #2a5db0;
+      --accent-ink: #ffffff;
+      --bg: #ffffff;
+      --panel: #f7f7f8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--ink);
+      background: var(--bg);
+    }
+    .wrap {
+      max-width: 480px;
+      margin: 0 auto;
+      padding: 24px 16px 64px;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 4px;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0 0 24px;
+    }
+    .day {
+      margin-bottom: 20px;
+    }
+    .day-label {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 8px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+    .slots {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 8px;
+    }
+    button.slot {
+      padding: 10px 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      font-size: 14px;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    button.slot:hover {
+      border-color: var(--accent);
+    }
+    .empty, .loading {
+      color: var(--muted);
+      font-size: 14px;
+      padding: 24px 0;
+    }
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.35);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: #fff;
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 360px;
+    }
+    .modal h2 { font-size: 16px; margin: 0 0 4px; }
+    .modal .when { color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin: 12px 0 4px;
+    }
+    input[type=text], input[type=email] {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 20px;
+    }
+    button.primary, button.secondary {
+      flex: 1;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+      border: 1px solid var(--line);
+    }
+    button.primary {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+    }
+    button.primary:disabled { opacity: 0.6; cursor: default; }
+    button.secondary { background: #fff; }
+    .result {
+      text-align: center;
+      padding: 12px 0 0;
+      font-size: 14px;
+    }
+    .error { color: #b3261e; font-size: 13px; margin-top: 8px; }
+    .index-list a {
+      display: block;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      color: var(--ink);
+      text-decoration: none;
+    }
+    .index-list a:hover { border-color: var(--accent); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <? if (!type) { ?>
+    <h1>Book a time</h1>
+    <p class="sub">Pick what this is for:</p>
+    <div class="index-list">
+      <? for (var key in allTypes) { ?>
+        <a href="<?= baseUrl ?>?type=<?= key ?>"><?= allTypes[key].label ?></a>
+      <? } ?>
+    </div>
+
+  <? } else { ?>
+    <h1><?= type.label ?></h1>
+    <p class="sub">
+      <?= type.durationMinutes ?> minutes
+      <? if (type.kind === 'call') { ?> · Google Meet <? } else { ?> · <?= type.location ?> <? } ?>
+      <br>Times shown in your local timezone.
+    </p>
+
+    <div id="slotsRoot"><div class="loading">Loading available times…</div></div>
+
+    <div class="modal-backdrop" id="modalBackdrop">
+      <div class="modal">
+        <h2>Confirm booking</h2>
+        <div class="when" id="modalWhen"></div>
+        <label for="nameInput">Name</label>
+        <input type="text" id="nameInput" autocomplete="name">
+        <label for="emailInput">Email</label>
+        <input type="email" id="emailInput" autocomplete="email">
+        <div class="error" id="modalError" style="display:none;"></div>
+        <div class="modal-actions">
+          <button class="secondary" id="cancelBtn">Cancel</button>
+          <button class="primary" id="confirmBtn">Confirm</button>
+        </div>
+        <div class="result" id="modalResult" style="display:none;"></div>
+      </div>
+    </div>
+
+    <script>
+      var TYPE_KEY = <?!= JSON.stringify(typeKey) ?>;
+      var selectedSlot = null;
+
+      function fmtDayLabel(date) {
+        return date.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+      }
+      function fmtTime(date) {
+        return date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      }
+      function localDayKey(date) {
+        // Group by the visitor's local calendar date.
+        var y = date.getFullYear(), m = date.getMonth(), d = date.getDate();
+        return y + '-' + m + '-' + d;
+      }
+
+      function renderSlots(slots) {
+        var root = document.getElementById('slotsRoot');
+        if (!slots.length) {
+          root.innerHTML = '<div class="empty">No times currently available. Please check back later.</div>';
+          return;
+        }
+
+        var byDay = {};
+        var order = [];
+        slots.forEach(function (s) {
+          var start = new Date(s.startIso);
+          var key = localDayKey(start);
+          if (!byDay[key]) { byDay[key] = { label: fmtDayLabel(start), items: [] }; order.push(key); }
+          byDay[key].items.push(s);
+        });
+
+        root.innerHTML = '';
+        order.forEach(function (key) {
+          var day = byDay[key];
+          var dayEl = document.createElement('div');
+          dayEl.className = 'day';
+          var labelEl = document.createElement('div');
+          labelEl.className = 'day-label';
+          labelEl.textContent = day.label;
+          dayEl.appendChild(labelEl);
+
+          var slotsEl = document.createElement('div');
+          slotsEl.className = 'slots';
+          day.items.forEach(function (s) {
+            var btn = document.createElement('button');
+            btn.className = 'slot';
+            btn.type = 'button';
+            btn.textContent = fmtTime(new Date(s.startIso));
+            btn.addEventListener('click', function () { openModal(s); });
+            slotsEl.appendChild(btn);
+          });
+          dayEl.appendChild(slotsEl);
+          root.appendChild(dayEl);
+        });
+      }
+
+      function openModal(slot) {
+        selectedSlot = slot;
+        var start = new Date(slot.startIso);
+        document.getElementById('modalWhen').textContent =
+          fmtDayLabel(start) + ' at ' + fmtTime(start);
+        document.getElementById('nameInput').value = '';
+        document.getElementById('emailInput').value = '';
+        document.getElementById('modalError').style.display = 'none';
+        document.getElementById('modalResult').style.display = 'none';
+        document.getElementById('confirmBtn').disabled = false;
+        document.getElementById('confirmBtn').textContent = 'Confirm';
+        document.getElementById('modalBackdrop').classList.add('open');
+      }
+      function closeModal() {
+        document.getElementById('modalBackdrop').classList.remove('open');
+      }
+
+      document.getElementById('cancelBtn').addEventListener('click', closeModal);
+
+      document.getElementById('confirmBtn').addEventListener('click', function () {
+        var name = document.getElementById('nameInput').value.trim();
+        var email = document.getElementById('emailInput').value.trim();
+        var errEl = document.getElementById('modalError');
+        if (!name || !email) {
+          errEl.textContent = 'Please fill in both name and email.';
+          errEl.style.display = 'block';
+          return;
+        }
+        errEl.style.display = 'none';
+
+        var btn = document.getElementById('confirmBtn');
+        btn.disabled = true;
+        btn.textContent = 'Booking…';
+        document.getElementById('cancelBtn').style.display = 'none';
+
+        google.script.run
+          .withSuccessHandler(function (res) {
+            if (res.ok) {
+              document.querySelector('.modal h2').style.display = 'none';
+              document.getElementById('modalWhen').style.display = 'none';
+              document.querySelectorAll('.modal label, .modal input').forEach(function (el) { el.style.display = 'none'; });
+              document.querySelector('.modal-actions').style.display = 'none';
+              var resultEl = document.getElementById('modalResult');
+              resultEl.textContent = res.message;
+              resultEl.style.display = 'block';
+            } else {
+              errEl.textContent = res.message;
+              errEl.style.display = 'block';
+              btn.disabled = false;
+              btn.textContent = 'Confirm';
+              document.getElementById('cancelBtn').style.display = 'block';
+            }
+          })
+          .withFailureHandler(function (err) {
+            errEl.textContent = 'Something went wrong: ' + err.message;
+            errEl.style.display = 'block';
+            btn.disabled = false;
+            btn.textContent = 'Confirm';
+            document.getElementById('cancelBtn').style.display = 'block';
+          })
+          .bookSlot(TYPE_KEY, selectedSlot.startIso, selectedSlot.endIso, name, email);
+      });
+
+      google.script.run
+        .withSuccessHandler(renderSlots)
+        .withFailureHandler(function (err) {
+          document.getElementById('slotsRoot').innerHTML =
+            '<div class="empty">Couldn\'t load available times: ' + err.message + '</div>';
+        })
+        .getAvailableSlots(TYPE_KEY);
+    </script>
+  <? } ?>
+
+</div>
+</body>
+</html>
