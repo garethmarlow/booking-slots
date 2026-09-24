@@ -6,11 +6,18 @@ Google's infrastructure under Gareth's eqsystems.io Workspace account.
 
 ## What it does
 
-Visitors get a link per booking type (`?type=call`, `?type=coffee-bradfield`,
-`?type=coffee-westhub`). The page shows available slots in the visitor's
-local timezone; picking one and submitting name + email creates a real
-Google Calendar event and sends the visitor an invite — a Google Meet link
-for "call" types, a fixed location for "f2f" types.
+Visitors get a link per booking type (`?type=call`, or `?type=coffee` for the
+merged in-person page; the individual `coffee-bradfield` / `coffee-westhub`
+types still work at their own links). With no `type`, an index page offers the
+choice. Pages show the eqsystems.io logo, a title ("Google Meet call" /
+"In-person meeting"), a description naming the host, and available slots in the
+visitor's local timezone. In-person slots are grouped by location, with the
+location named once above each set of buttons. Picking a slot and submitting
+name + email creates a real Google Calendar event and sends the visitor an
+invite — a Google Meet link for "call" types, the address in the location
+field for "f2f" types. Invite titles are `<name> : <hostName> call|meeting`.
+After booking, the modal's Close button returns to the booking page and
+refreshes the slots.
 
 ## How availability works (the core mechanism)
 
@@ -18,7 +25,7 @@ There's no admin UI and no separate availability config. Availability is
 read directly off Gareth's calendar:
 
 1. He creates a calendar event whose **title exactly matches** a type's
-   `blockTitle` in `CONFIG.types` (see `Code.gs`), and sets it to
+   `blockTitle` in `CONFIG.types` (see `Code.js`), and sets it to
    **Free** (not Busy). Recurring events work fine (e.g. "1hr call" every
    Tuesday 9am–12pm).
 2. `getAvailableSlots()` finds those Free-marked blocks, slices each one
@@ -39,21 +46,27 @@ event directly, the normal way.
 
 ## Files
 
-- `Code.gs` — `CONFIG` (edit this to add/change booking types), the
-  availability scan, and the booking logic.
+- `Code.js` — `CONFIG` (edit this to add/change booking types, and `hostName`),
+  the availability scan, and the booking logic. (Named `Code.gs` in the Apps
+  Script editor; clasp uses `.js` locally.)
 - `Index.html` — the booking page. Server-rendered via GAS scriptlets
   (`<? ?>` / `<?= ?>`), then a plain-JS client script fetches slots via
-  `google.script.run` and handles the pick-a-slot / confirm flow.
+  `google.script.run` and handles the pick-a-slot / confirm flow. The logo is
+  embedded as a base64 PNG `<img>` at the top of the page (no external hosting).
 - `appsscript.json` — manifest. Declares the Calendar Advanced Service and
   sets web app access to "Anyone" (`ANYONE_ANONYMOUS`) so visitors don't
   need a Google login.
 
 ## Adding or changing a booking type
 
-Edit the `types` object in `CONFIG` (top of `Code.gs`). Each entry needs:
-`label`, `blockTitle` (must exactly match the calendar event title used for
-availability), `durationMinutes`, `kind` (`'call'` or `'f2f'`), and
-`location` (f2f only). No other code changes needed. After editing, push
+Edit the `types` object in `CONFIG` (top of `Code.js`). Each entry needs:
+`label` (used on the index page), `blockTitle` (must exactly match the calendar
+event title used for availability), `durationMinutes`, `kind` (`'call'` or
+`'f2f'`), and for f2f: `locationName` (short name shown above the slot buttons)
+and `location` (full address, put in the event's location field). To merge
+several types onto one page, list them in `CONFIG.groups`. Page titles and
+descriptions are derived from `kind`, duration and `hostName` in `doGet()`.
+No other code changes needed. After editing, push
 and redeploy — see below.
 
 ## Deploying
@@ -61,11 +74,13 @@ and redeploy — see below.
 This is a live web app, not something with a staging environment. After any
 change:
 
-1. `clasp push` (or paste into the Apps Script editor).
-2. In the Apps Script editor: **Deploy → Manage deployments → pencil icon
-   → Version: New version → Deploy**. This keeps the same `/exec` URL — a
-   *new* deployment would issue a different URL and break links already
-   handed out.
+1. `clasp push` (or paste into the Apps Script editor). If it fails with
+   `invalid_rapt`, run `clasp login` again (Workspace forces periodic reauth).
+2. Redeploy to the *existing* deployment — either in the editor (**Deploy →
+   Manage deployments → pencil icon → Version: New version → Deploy**) or via
+   `clasp deployments` then `clasp deploy -i <versioned deployment id> -d "note"`
+   (not the `@HEAD` one). This keeps the same `/exec` URL — a *new* deployment
+   would issue a different URL and break links already handed out.
 
 ## Known gotcha: don't use the address-bar URL
 
