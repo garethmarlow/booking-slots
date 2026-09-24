@@ -22,26 +22,39 @@ const CONFIG = {
   calendarId: 'primary',           // 'primary' = your main eqsystems.io calendar
   organiserTimeZone: 'Europe/London',
   weeksAhead: 8,                   // how far out to offer slots
+  hostName: 'Gareth Marlow',       // shown on the page and in invite titles
   types: {
     'call': {
-      label: '1hr call',
+      label: 'Google Meet call',
       blockTitle: '1hr call',      // must exactly match the FREE availability block's title
       durationMinutes: 60,
       kind: 'call',                // 'call' -> Google Meet link added automatically
     },
     'coffee-bradfield': {
-      label: 'F2F coffee (Bradfield Centre)',
+      label: 'In-person meeting (Bradfield Centre)',
       blockTitle: 'F2F coffee (Bradfield Centre)',
       durationMinutes: 60,
       kind: 'f2f',                 // 'f2f' -> fixed location added, no Meet link
+      locationName: 'Bradfield Centre',
       location: '184 Cambridge Science Park Rd, Milton, Cambridge CB4 0GA',
     },
     'coffee-westhub': {
-      label: 'F2F coffee (West Hub)',
+      label: 'In-person meeting (West Hub)',
       blockTitle: 'F2F coffee (West Hub)',
       durationMinutes: 60,
       kind: 'f2f',
+      locationName: 'West Hub',
       location: 'West Hub, JJ Thomson Ave, Cambridge CB3 0US',
+    },
+  },
+  // A group merges several types onto one booking page: visitors see every
+  // member type's slots together (each tagged with its own location) instead
+  // of picking a location first. Member types stay individually bookable at
+  // their own ?type= link too.
+  groups: {
+    'coffee': {
+      label: 'In-person meeting',
+      types: ['coffee-bradfield', 'coffee-westhub'],
     },
   },
 };
@@ -52,12 +65,39 @@ const CONFIG = {
 
 function doGet(e) {
   const typeKey = e.parameter.type || '';
-  const type = CONFIG.types[typeKey];
+  const type = CONFIG.types[typeKey] || null;
+  const groupDef = CONFIG.groups[typeKey] || null;
+  const group = groupDef
+    ? { key: typeKey, label: groupDef.label, memberTypes: groupDef.types.map(function (k) { return CONFIG.types[k]; }) }
+    : null;
+
+  // Types that belong to a group are booked via the group's merged page
+  // instead, so leave them off the "pick a type" index.
+  const groupedTypeKeys = {};
+  Object.keys(CONFIG.groups).forEach(function (gk) {
+    CONFIG.groups[gk].types.forEach(function (tk) { groupedTypeKeys[tk] = true; });
+  });
+  const indexItems = Object.keys(CONFIG.types)
+    .filter(function (tk) { return !groupedTypeKeys[tk]; })
+    .map(function (tk) { return { key: tk, label: CONFIG.types[tk].label }; })
+    .concat(Object.keys(CONFIG.groups).map(function (gk) { return { key: gk, label: CONFIG.groups[gk].label }; }));
+
+  // Page heading + one-line description, derived from the type/group.
+  const durationMinutes = type ? type.durationMinutes : (group ? group.memberTypes[0].durationMinutes : 0);
+  const isCall = type ? type.kind === 'call' : false;
+  const pageTitle = type ? (isCall ? 'Google Meet call' : 'In-person meeting') : (group ? group.label : '');
+  const pageDescription = isCall
+    ? durationMinutes + ' minute Google Meet calls with ' + CONFIG.hostName
+    : durationMinutes + ' minute, face-to-face meetings with ' + CONFIG.hostName;
 
   const template = HtmlService.createTemplateFromFile('Index');
+  template.hostName = CONFIG.hostName;
+  template.pageTitle = pageTitle;
+  template.pageDescription = pageDescription;
   template.typeKey = typeKey;
-  template.type = type || null;
-  template.allTypes = CONFIG.types;
+  template.type = type;
+  template.group = group;
+  template.indexItems = indexItems;
   // Absolute /exec URL for this deployment. Used for the index page's links
   // instead of a relative href — Google rewrites the visible address bar to
   // an internal content-frame URL after load, so a relative link would
@@ -66,7 +106,7 @@ function doGet(e) {
   template.baseUrl = ScriptApp.getService().getUrl();
 
   return template.evaluate()
-    .setTitle(type ? type.label : 'Book a time')
+    .setTitle(pageTitle || 'Book a time')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
@@ -135,11 +175,40 @@ function getAvailableSlots(typeKey) {
         slots.push({
           startIso: slotStart.toISOString(),
           endIso: slotEnd.toISOString(),
+          locationName: type.locationName || '',
+          location: type.location || '',
         });
       }
 
       slotStart = new Date(slotStart.getTime() + durationMs);
     }
+  });
+
+  slots.sort(function (a, b) { return a.startIso.localeCompare(b.startIso); });
+  return slots;
+}
+
+/**
+ * Same as getAvailableSlots, but merges every member type of a group into
+ * one sorted list, tagging each slot with the type it belongs to so the
+ * client can label it (e.g. by location) and book it correctly.
+ */
+function getAvailableSlotsForGroup(groupKey) {
+  const group = CONFIG.groups[groupKey];
+  if (!group) throw new Error('Unknown booking group: ' + groupKey);
+
+  const slots = [];
+  group.types.forEach(function (typeKey) {
+    const type = CONFIG.types[typeKey];
+    getAvailableSlots(typeKey).forEach(function (s) {
+      slots.push({
+        startIso: s.startIso,
+        endIso: s.endIso,
+        locationName: s.locationName,
+        location: s.location,
+        typeKey: typeKey,
+      });
+    });
   });
 
   slots.sort(function (a, b) { return a.startIso.localeCompare(b.startIso); });
@@ -179,7 +248,7 @@ function bookSlot(typeKey, startIso, endIso, name, email) {
       return { ok: false, message: 'Sorry — that slot was just taken. Please go back and pick another.' };
     }
 
-    const summary = type.label + ' — ' + name;
+    const summary = name + ' : ' + CONFIG.hostName + ' ' + (type.kind === 'call' ? 'call' : 'meeting');
 
     if (type.kind === 'call') {
       createCallEvent_(start, end, summary, email);

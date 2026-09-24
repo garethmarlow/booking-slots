@@ -1,0 +1,9 @@
+# clasp local project pointer (contains your scriptId, machine-specific)
+.claspignore
+.clasp.json
+
+# OS cruft
+.DS_Store
+
+# editor cruft
+*.swp
